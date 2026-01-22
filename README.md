@@ -1,6 +1,6 @@
 # Classical Music Metadata Tagger
 
-A powerful, AI-driven tool designed to organize, tag, and manage your classical music collection. This script uses the OpenRouter API (Accessing models like Google Gemini, GPT-4, etc.) to intelligently analyze filenames and contexts, generating accurate and standardized metadata for your FLAC files.
+A powerful, AI-driven tool designed to organize, tag, and manage your classical music collection. This script uses the OpenRouter API (Accessing models like Google Gemini, GPT-5.x, etc.) to intelligently analyze filenames and contexts, generating accurate and standardized metadata for your FLAC files.
 
 ## Features
 
