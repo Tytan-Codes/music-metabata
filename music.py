@@ -18,9 +18,17 @@ import json
 import re
 import subprocess
 import shutil
+import io
 from pathlib import Path
-from mutagen.flac import FLAC
+from mutagen.flac import FLAC, Picture
 from openai import OpenAI
+import random
+import hashlib
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    HAS_PILLOW = True
+except ImportError:
+    HAS_PILLOW = False
 
 # Rich TUI imports
 from rich.console import Console
@@ -91,6 +99,9 @@ def show_menu(folder_path=None):
 [bold cyan]5[/bold cyan]  ▸  [white]Change Folder[/white]
     [dim]Select a different music folder[/dim]
 
+[bold cyan]6[/bold cyan]  ▸  [white]Generate Cover Art[/white]
+    [dim]Create simple covers for folders missing art[/dim]
+
 [bold red]Q[/bold red]  ▸  [white]Quit[/white]
             """),
             vertical="middle"
@@ -105,7 +116,7 @@ def show_menu(folder_path=None):
     
     choice = Prompt.ask(
         "\n[bold cyan]Select an option[/bold cyan]",
-        choices=["1", "2", "3", "4", "5", "q", "Q"],
+        choices=["1", "2", "3", "4", "5", "6", "q", "Q"],
         default="1"
     )
     return choice.lower()
@@ -809,7 +820,253 @@ def process_folder_audit(folder_path, client, dry_run=False, auto_approve=False)
     console.print(summary_table)
 
 
-def show_statistics(folder_path):
+
+def generate_cover_image_bytes(artist, album, title, work=None):
+    """Generate a minimal, luxurious cover image in memory"""
+    if not HAS_PILLOW:
+        return None
+
+    width = 1200
+    height = 1200
+    
+    # Luxurious Color Palette (Deep, Rich, Minimal)
+    # Slate, Midnight, Charcoal, Deep Emerald, Burgundy, Deep Navy
+    colors = [
+        (20, 24, 28),    # Dark Lead
+        (15, 23, 42),    # Midnight Navy
+        (28, 25, 23),    # Warm Charcoal
+        (12, 38, 28),    # Deep British Racing Green
+        (48, 12, 12),    # Deep Burgundy
+        (23, 23, 23),    # Pure Dark Grey
+        (33, 37, 41),    # Dark Slate
+        (44, 62, 80),    # Midnight Blue
+    ]
+    
+    # Seed based on Title + Artist for uniqueness per song
+    seed_str = f"{title}{artist}{album}"
+    hash_object = hashlib.md5(seed_str.encode())
+    seed_val = int(hash_object.hexdigest(), 16)
+    random.seed(seed_val)
+    
+    bg_color = random.choice(colors)
+    
+    img = Image.new('RGB', (width, height), color=bg_color)
+    draw = ImageDraw.Draw(img)
+    
+    # Fonts
+    # Try to find elegant system fonts
+    font_path_serif = None
+    font_path_sans = None
+    
+    # MacOS paths
+    serif_candidates = [
+        "/System/Library/Fonts/Supplemental/Didot.ttc",
+        "/System/Library/Fonts/Supplemental/Bodoni 72.ttc",
+        "/System/Library/Fonts/Times.ttc",
+        "/System/Library/Fonts/Supplemental/Times New Roman.ttf"
+    ]
+    
+    sans_candidates = [
+        "/System/Library/Fonts/HelveticaNeue.ttc",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Supplemental/Arial.ttf"
+    ]
+    
+    for fp in serif_candidates:
+        if os.path.exists(fp):
+            font_path_serif = fp
+            break
+            
+    for fp in sans_candidates:
+        if os.path.exists(fp):
+            font_path_sans = fp
+            break
+            
+    try:
+        if font_path_serif:
+            # Use index 0 usually safe for ttc
+            title_font = ImageFont.truetype(font_path_serif, 110)
+            artist_font = ImageFont.truetype(font_path_sans if font_path_sans else font_path_serif, 50)
+            meta_font = ImageFont.truetype(font_path_sans if font_path_sans else font_path_serif, 40)
+        else:
+            title_font = ImageFont.load_default()
+            artist_font = ImageFont.load_default()
+            meta_font = ImageFont.load_default()
+    except Exception:
+        title_font = ImageFont.load_default()
+        artist_font = ImageFont.load_default()
+        meta_font = ImageFont.load_default()
+
+    # Layout - Clean Typography
+    # 1. Work/Title (Center, Large, Elegant)
+    # 2. Artist (Bottom Center, Small, Spaced)
+    
+    # Helper to wrap text
+    def get_wrapped_lines(text, font, max_width):
+        words = text.split()
+        lines = []
+        current_line = []
+        for word in words:
+            current_line.append(word)
+            text_check = " ".join(current_line)
+            bbox = draw.textbbox((0, 0), text_check, font=font)
+            if bbox[2] > max_width:
+                current_line.pop()
+                lines.append(" ".join(current_line))
+                current_line = [word]
+        lines.append(" ".join(current_line))
+        return lines
+
+    # Draw Title
+    display_title = work if work else title
+    title_lines = get_wrapped_lines(display_title, title_font, width - 300)
+    
+    # Calculate total text height to center it vertically
+    total_height = 0
+    line_height = 140 # approx for 110pt font
+    total_height += len(title_lines) * line_height
+    
+    current_y = (height - total_height) // 2 - 50 # Slightly above center
+    
+    for line in title_lines:
+        bbox = draw.textbbox((0, 0), line, font=title_font)
+        text_width = bbox[2] - bbox[0]
+        x = (width - text_width) // 2
+        draw.text((x, current_y), line, fill=(240, 240, 240), font=title_font) # Off-white
+        current_y += line_height
+
+    # Draw Movement (if exists and different from title)
+    # If title was used as work, maybe show movement below?
+    # For simplicity, let's keep it minimal.
+
+    # Draw Artist at bottom
+    artist_upper = artist.upper().replace(", ", "  •  ")
+    bbox = draw.textbbox((0, 0), artist_upper, font=artist_font)
+    text_width = bbox[2] - bbox[0]
+    x = (width - text_width) // 2
+    draw.text((x, height - 200), artist_upper, fill=(180, 180, 180), font=artist_font) # Grey
+    
+    # Draw Album Name very small at very bottom
+    album_upper = album.upper()
+    bbox = draw.textbbox((0, 0), album_upper, font=meta_font)
+    text_width = bbox[2] - bbox[0]
+    x = (width - text_width) // 2
+    draw.text((x, height - 120), album_upper, fill=(100, 100, 100), font=meta_font) # Darker Grey
+
+    # Add a very subtle grain or border?
+    # Minimal border
+    draw.rectangle([(50, 50), (width-50, height-50)], outline=(255, 255, 255, 30), width=2)
+    
+    # Save to bytes
+    output = io.BytesIO()
+    img.save(output, format="JPEG", quality=95)
+    return output.getvalue()
+
+
+
+def process_cover_art(folder_path, dry_run=False, force_overwrite=False):
+    """Check for missing cover art and generate UNIQUE covers for each file"""
+    if not HAS_PILLOW:
+        console.print(Panel(
+            "[red]Pillow library not installed.[/red]\n"
+            "Please run: [cyan]pip install Pillow[/cyan]",
+            title="[bold red]Error[/bold red]",
+            border_style="red"
+        ))
+        return
+
+    folder = Path(folder_path)
+    if not folder.exists():
+        return
+
+    # Find all FLAC files directly
+    flac_files = list(folder.rglob("*.flac"))
+    
+    console.print(Panel(
+        f"[bold]Found:[/bold] {len(flac_files)} music files\n"
+        f"[bold]Mode:[/bold] {'[yellow]DRY RUN[/yellow]' if dry_run else '[green]LIVE[/green]'}\n"
+        f"[bold]Overwrite:[/bold] {'[red]YES[/red]' if force_overwrite else '[green]NO (Skip existing)[/green]'}\n"
+        f"[dim]Generating unique, minimal cover art for each track...[/dim]",
+        title="[bold cyan]═══ UNIQUE COVER GENERATOR ═══[/bold cyan]",
+        border_style="cyan"
+    ))
+    
+    generated_count = 0
+    skipped_count = 0
+    failed_count = 0
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console
+    ) as progress:
+        task = progress.add_task("[cyan]Processing files...", total=len(flac_files))
+        
+        for flac_file in flac_files:
+            progress.update(task, description=f"[cyan]Art:[/cyan] {flac_file.name[:30]}...")
+            
+            try:
+                audio = FLAC(flac_file)
+                
+                # Check if it already has a FRONT_COVER
+                has_front_cover = False
+                if audio.pictures:
+                    for p in audio.pictures:
+                        if p.type == 3: # Front Cover
+                            has_front_cover = True
+                            break
+                            
+                if has_front_cover and not force_overwrite:
+                    # Skip if present and not forcing
+                    skipped_count += 1
+                    # Loop continue but update progress
+                    progress.advance(task)
+                    continue
+
+                # Get Metadata
+                artist = audio.get("ARTIST", ["Unknown Artist"])[0]
+                album = audio.get("ALBUM", ["Unknown Album"])[0]
+                title = audio.get("TITLE", [flac_file.stem])[0]
+                work = audio.get("WORK", [None])[0]
+                
+                if dry_run:
+                    console.print(f"  [yellow]Would generate for:[/yellow] {title}")
+                    generated_count += 1
+                else:
+                    # Generate Image Bytes
+                    image_data = generate_cover_image_bytes(artist, album, title, work)
+                    
+                    if image_data:
+                        # Embed
+                        image = Picture()
+                        image.type = 3
+                        image.mime = u"image/jpeg"
+                        image.desc = u"Minimal Cover"
+                        image.data = image_data
+                        
+                        # Clear existing if forcing
+                        if force_overwrite:
+                            audio.clear_pictures()
+                        
+                        audio.add_picture(image)
+                        audio.save()
+                        
+                        console.print(f"  [green]✓ Embedded:[/green] {flac_file.name}")
+                        generated_count += 1
+                    else:
+                        console.print(f"  [red]✗ Failed to generate image data[/red]")
+                        failed_count += 1
+                        
+            except Exception as e:
+                console.print(f"  [red]Error:[/red] {flac_file.name} - {e}")
+                failed_count += 1
+            
+            progress.advance(task)
+            
+    console.print(f"\n[bold]Finished![/bold] Generated: {generated_count}, Skipped (Existing): {skipped_count}, Failed: {failed_count}\n")
+
     """Display statistics about the music library"""
     folder = Path(folder_path)
     
@@ -1014,6 +1271,15 @@ def main():
         elif choice == '4':
             # Settings
             show_settings()
+        
+        elif choice == '6':
+            # Generate Cover Art
+            dry_run = Confirm.ask("Run in dry-run mode?", default=False)
+            if not dry_run:
+                force_overwrite = Confirm.ask("[red]Overwrite existing covers?[/red]", default=False)
+            else:
+                force_overwrite = False
+            process_cover_art(folder_path, dry_run, force_overwrite)
         
         console.print()
         Prompt.ask("[dim]Press Enter to continue...[/dim]", default="")
