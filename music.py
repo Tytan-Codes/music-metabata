@@ -1067,6 +1067,8 @@ def process_cover_art(folder_path, dry_run=False, force_overwrite=False):
             
     console.print(f"\n[bold]Finished![/bold] Generated: {generated_count}, Skipped (Existing): {skipped_count}, Failed: {failed_count}\n")
 
+
+def show_statistics(folder_path):
     """Display statistics about the music library"""
     folder = Path(folder_path)
     
